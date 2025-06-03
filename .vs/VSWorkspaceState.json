@@ -1,0 +1,16 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\.github",
+    "\\assets",
+    "\\build",
+    "\\build\\hot_reload",
+    "\\build\\hot_reload\\game_pdbs",
+    "\\source",
+    "\\source\\main_hot_reload",
+    "\\source\\main_release",
+    "\\source\\main_web"
+  ],
+  "SelectedNode": "\\source\\game.odin",
+  "PreviewInSolutionExplorer": false
+}
