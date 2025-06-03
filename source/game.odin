@@ -27,6 +27,7 @@ created.
 
 package game
 
+import "base:runtime"
 import "core:math/linalg"
 import "core:log"
 import sdl "vendor:sdl3"
@@ -81,6 +82,10 @@ game_init_window :: proc() {
 		log.errorf("Failed to initialize SDL! %s", sdl.GetError())
 	}
 	sdl.SetLogPriorities(.VERBOSE)
+	sdl.SetLogOutputFunction(proc "c" (userdata : rawptr, category: sdl.LogCategory, priority: sdl.LogPriority, message: cstring) {
+		context = runtime.default_context()
+		log.debugf("SDL Log {}[{}]:{}", category, priority, message)
+	}, nil)
 
 	window_flags := sdl.WindowFlags {
 		.RESIZABLE,
@@ -118,6 +123,8 @@ update :: proc() {
 	g.time.now_ns = sdl.GetTicksNS()
 	g.time.dt = f32(g.time.now_ns - g.time.past_ns) / f32(1_000_000_000)
 	
+	g.input.mouse_delta = {0, 0}
+
 	ev: sdl.Event
 	for sdl.PollEvent(&ev) {
 		#partial switch ev.type {
@@ -132,16 +139,21 @@ update :: proc() {
 				repeat = false, 
 			}
 		case .MOUSE_MOTION:
-
-		case .MOUSE_BUTTON_DOWN:
+			g.input.mouse_delta = {f32(ev.motion.xrel), f32(ev.motion.yrel)}
+			g.input.mouse_loc = {f32(ev.motion.x), f32(ev.motion.y)}
+			fallthrough
 		case .MOUSE_BUTTON_UP:
+			fallthrough
+		case .MOUSE_BUTTON_DOWN:
+			for flag in sdl.MouseButtonFlag {
+				active_flags := sdl.GetMouseState(nil, nil)
+				g.input.mb_down[flag] = PressState {
+					pressed = flag in active_flags,
+					repeat = ev.button.down, // Mouse button down events are not repeated.
+				}
+			}
 		case .QUIT:
 			g.run = false 
-		case .RENDER_DEVICE_LOST:
-			log.error("Render device lost, exiting...")
-			g.run = false
-		case .RENDER_DEVICE_RESET:
-			log.info("Render device reset, continuing.")
 		}
 		log.debugf("Event: %s", ev.type)
 	}
@@ -175,7 +187,7 @@ draw :: proc() {
 	color_target := sdl.GPUColorTargetInfo{
 		texture = swapchain_tex,
 		load_op = .CLEAR,
-		clear_color = {.5, .6, .2, 1.0},
+		clear_color = { g.input.mb_down[.LEFT].pressed?.5:.3 , .6, .2, 1.0 },
 	}
 	pass := sdl.BeginGPURenderPass(cmds, &color_target, 1, nil)
 	
