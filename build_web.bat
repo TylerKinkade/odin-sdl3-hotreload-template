@@ -9,6 +9,29 @@ if not exist %OUT_DIR% mkdir %OUT_DIR%
 set EMSDK_QUIET=1
 call %EMSCRIPTEN_SDK_DIR%\emsdk_env.bat
 
+:: Build shaders
+echo Building shaders...
+:: Compile all .vert shaders:
+set "SHADER_DIR=assets\shaders"
+
+:: 2) Compile all "*.glsl.vert" → "shadername.spv.vert"
+for %%F in ("%SHADER_DIR%\*.glsl.vert") do (
+    echo Compiling %%~nxF ...
+    :: %%~nF is "shadername.glsl" → strip out ".glsl" to get "shadername"
+    set "BASENAME=%%~nF"
+    set "STRIPPED=!BASENAME:.glsl=!"
+    :: %%~dpF = drive+path\,   %%~xF = ".vert"
+    glslc "%%F" -o "%%~dpF!STRIPPED!.spv%%~xF"
+)
+
+:: 3) Compile all "*.glsl.frag" → "shadername.spv.frag"
+for %%F in ("%SHADER_DIR%\*.glsl.frag") do (
+    echo Compiling %%~nxF ...
+    set "BASENAME=%%~nF"
+    set "STRIPPED=!BASENAME:.glsl=!"
+    glslc "%%F" -o "%%~dpF!STRIPPED!.spv%%~xF"
+)
+
 :: Note RAYLIB_WASM_LIB=env.o -- env.o is an internal WASM object file. You can
 :: see how RAYLIB_WASM_LIB is used inside <odin>/vendor/raylib/raylib.odin.
 ::

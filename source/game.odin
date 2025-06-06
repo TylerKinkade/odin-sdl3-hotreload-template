@@ -32,12 +32,15 @@ import "core:math/linalg"
 import "core:log"
 import sdl "vendor:sdl3"
 
+default_context := runtime.default_context()
+
 PIXEL_WINDOW_HEIGHT :: 180
 
 RenderData :: struct {
 	window: ^sdl.Window, // Pointer to the SDL window.
 	renderer : ^sdl.Renderer, // Pointer to the SDL renderer.
 	gpu : ^sdl.GPUDevice, // Pointer to the SDL renderer.
+	pipeline : ^sdl.GPUGraphicsPipeline, // Pointer to the GPU pipeline.
 } 
 
 PressState :: struct {
@@ -70,6 +73,31 @@ Game_Memory :: struct {
 
 g: ^Game_Memory
 
+test_vert := #load("../assets/shaders/test.spv.vert")
+test_frag := #load("../assets/shaders/test.spv.frag")
+
+load_shader :: proc(code : []u8, stage : sdl.GPUShaderStage) -> ^sdl.GPUShader {
+	if len(code) == 0 {
+		log.errorf("Shader code is empty!")
+		return nil
+	}
+
+	shader := sdl.CreateGPUShader(g.r.gpu, {
+		code_size = len(code),
+		code = raw_data(code),
+		entrypoint = "main",
+		format = {.SPIRV},
+		stage = stage,
+	})
+
+	if shader == nil {
+		log.errorf("Failed to create GPU shader! %s", sdl.GetError())
+		return nil
+	}
+
+	return shader
+}
+
 @(export)
 game_init_window :: proc() {
 	g = new(Game_Memory)
@@ -93,8 +121,27 @@ game_init_window :: proc() {
 		.INPUT_FOCUS,
 	}
 	g.r.window = sdl.CreateWindow("Odin SDL Hot Reload Template", 1280, 720, window_flags)
-	g.r.gpu = sdl.CreateGPUDevice({.DXIL}, true, nil)
+	g.r.gpu = sdl.CreateGPUDevice({.SPIRV}, true, nil)
+
 	ok := sdl.ClaimWindowForGPUDevice(g.r.gpu, g.r.window); assert(ok)
+
+	vert_shd := load_shader(test_vert, .VERTEX)
+	frag_shd := load_shader(test_frag, .FRAGMENT)
+
+	g.r.pipeline = sdl.CreateGPUGraphicsPipeline(g.r.gpu, {
+		vertex_shader = vert_shd,
+		fragment_shader = frag_shd,
+		primitive_type = .TRIANGLELIST,
+		target_info = {
+			num_color_targets= 1,
+			color_target_descriptions= &(sdl.GPUColorTargetDescription {
+				format = sdl.GetGPUSwapchainTextureFormat(g.r.gpu, g.r.window),
+			}),
+		},
+	})
+
+	sdl.ReleaseGPUShader(g.r.gpu, vert_shd)
+	sdl.ReleaseGPUShader(g.r.gpu, frag_shd)
 }
 
 @(export)

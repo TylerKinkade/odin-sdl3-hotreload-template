@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 
 :: This creates a build that is similar to a release build, but it's debuggable.
 :: There is no hot reloading and no separate game library.
@@ -6,6 +7,29 @@
 set OUT_DIR=build\debug
 
 if not exist %OUT_DIR% mkdir %OUT_DIR%
+
+:: Build shaders
+echo Building shaders...
+:: Compile all .vert shaders:
+set "SHADER_DIR=assets\shaders"
+
+:: 2) Compile all "*.glsl.vert" → "shadername.spv.vert"
+for %%F in ("%SHADER_DIR%\*.glsl.vert") do (
+    echo Compiling %%~nxF ...
+    :: %%~nF is "shadername.glsl" → strip out ".glsl" to get "shadername"
+    set "BASENAME=%%~nF"
+    set "STRIPPED=!BASENAME:.glsl=!"
+    :: %%~dpF = drive+path\,   %%~xF = ".vert"
+    glslc "%%F" -o "%%~dpF!STRIPPED!.spv%%~xF"
+)
+
+:: 3) Compile all "*.glsl.frag" → "shadername.spv.frag"
+for %%F in ("%SHADER_DIR%\*.glsl.frag") do (
+    echo Compiling %%~nxF ...
+    set "BASENAME=%%~nF"
+    set "STRIPPED=!BASENAME:.glsl=!"
+    glslc "%%F" -o "%%~dpF!STRIPPED!.spv%%~xF"
+)
 
 odin build source\main_release -out:%OUT_DIR%\game_debug.exe -strict-style -vet -debug
 IF %ERRORLEVEL% NEQ 0 exit /b 1
