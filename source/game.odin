@@ -231,16 +231,25 @@ draw :: proc() {
 	}
 
 	cmds := sdl.AcquireGPUCommandBuffer(g.r.gpu)
+
 	swapchain_tex: ^sdl.GPUTexture
 	ok := sdl.WaitAndAcquireGPUSwapchainTexture(cmds, g.r.window, &swapchain_tex, nil, nil); assert(ok)
+	if swapchain_tex == nil {
+		log.errorf("Failed to acquire swapchain texture! %s", sdl.GetError())
+		return
+	}
+	
 	color_target := sdl.GPUColorTargetInfo{
 		texture = swapchain_tex,
 		load_op = .CLEAR,
 		clear_color = { g.input.mb_down[.LEFT].pressed?.5:.3 , .6, .2, 1.0 },
 	}
 	pass := sdl.BeginGPURenderPass(cmds, &color_target, 1, nil)
+
 	sdl.BindGPUGraphicsPipeline(pass, g.r.pipeline)
+
 	sdl.DrawGPUPrimitives(pass, 3, 1, 0, 0)
+
 	sdl.EndGPURenderPass(pass)
 	ok = sdl.SubmitGPUCommandBuffer(cmds); assert(ok)
 }
