@@ -34,7 +34,7 @@ import sdl "vendor:sdl3"
 
 default_context := runtime.default_context()
 
-PIXEL_WINDOW_HEIGHT :: 180
+PIXEL_WINDOW_HEIGHT :: 720
 
 RenderData :: struct {
 	window: ^sdl.Window, // Pointer to the SDL window.
@@ -73,8 +73,8 @@ Game_Memory :: struct {
 
 g: ^Game_Memory
 
-test_vert := #load("../assets/shaders/test.spv.vert")
-test_frag := #load("../assets/shaders/test.spv.frag")
+passthrough_vert := #load("../assets/shaders/passthrough.spv.vert")
+fullbright_frag := #load("../assets/shaders/fullbright.spv.frag")
 
 load_shader :: proc(code : []u8, stage : sdl.GPUShaderStage) -> ^sdl.GPUShader {
 	if len(code) == 0 {
@@ -125,8 +125,8 @@ game_init_window :: proc() {
 
 	ok := sdl.ClaimWindowForGPUDevice(g.r.gpu, g.r.window); assert(ok)
 
-	vert_shd := load_shader(test_vert, .VERTEX)
-	frag_shd := load_shader(test_frag, .FRAGMENT)
+	vert_shd := load_shader(passthrough_vert, .VERTEX)
+	frag_shd := load_shader(fullbright_frag, .FRAGMENT)
 
 	g.r.pipeline = sdl.CreateGPUGraphicsPipeline(g.r.gpu, {
 		vertex_shader = vert_shd,
@@ -140,6 +140,8 @@ game_init_window :: proc() {
 		},
 	})
 
+	// If we need to reuse for additional pipelines, we'll want to keep this around.
+	// For now, release the shaders since the pipeline is created already.
 	sdl.ReleaseGPUShader(g.r.gpu, vert_shd)
 	sdl.ReleaseGPUShader(g.r.gpu, frag_shd)
 }
@@ -237,7 +239,8 @@ draw :: proc() {
 		clear_color = { g.input.mb_down[.LEFT].pressed?.5:.3 , .6, .2, 1.0 },
 	}
 	pass := sdl.BeginGPURenderPass(cmds, &color_target, 1, nil)
-	
+	sdl.BindGPUGraphicsPipeline(pass, g.r.pipeline)
+	sdl.DrawGPUPrimitives(pass, 3, 1, 0, 0)
 	sdl.EndGPURenderPass(pass)
 	ok = sdl.SubmitGPUCommandBuffer(cmds); assert(ok)
 }
