@@ -2,6 +2,6 @@ package game
 
 Camera :: struct {
     zoom: f32,
-    target: V2f,
-    offset: V2f,
+    target: V3f,
+    offset: V3f,
 }

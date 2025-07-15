@@ -30,35 +30,17 @@ package game
 import "base:runtime"
 import "core:math/linalg"
 import "core:log"
+import "core:math"
+import "core:mem"
 import sdl "vendor:sdl3"
 
 default_context := runtime.default_context()
 
 PIXEL_WINDOW_HEIGHT :: 720
 
-RenderData :: struct {
-	window: ^sdl.Window, // Pointer to the SDL window.
-	renderer : ^sdl.Renderer, // Pointer to the SDL renderer.
-	gpu : ^sdl.GPUDevice, // Pointer to the SDL renderer.
-	pipeline : ^sdl.GPUGraphicsPipeline, // Pointer to the GPU pipeline.
-} 
-
-PressState :: struct {
-	pressed: bool, // If the key was pressed this frame.
-	repeat: bool, // If the key is being held down.
-}
-
-Input :: struct {
-	mouse_delta: V2f, // The mouse delta since last frame.
-	mouse_loc: V2f, // The mouse position in pixels.
-
-	keys_down: #sparse[sdl.Scancode]PressState,
-	mb_down: [sdl.MouseButtonFlag]PressState,
-}
-
 Time :: struct {
-	past_ns: u64, // The last tick in nanoseconds.
-	now_ns: u64, // The last tick in nanoseconds.
+	past_tick: u64, // The last tick 
+	now_tick: u64, // The last tick 
 	dt: f32, // Delta time in seconds.
 }
 
@@ -67,36 +49,12 @@ Game_Memory :: struct {
 	input : Input, // Input state.
 	time : Time,
 
-	player_pos: V2f,
+	player_pos: V3f,
+	player_rot: V3f,
 	run: bool,
 }
 
 g: ^Game_Memory
-
-passthrough_vert := #load("../assets/shaders/passthrough.spv.vert")
-fullbright_frag := #load("../assets/shaders/fullbright.spv.frag")
-
-load_shader :: proc(code : []u8, stage : sdl.GPUShaderStage) -> ^sdl.GPUShader {
-	if len(code) == 0 {
-		log.errorf("Shader code is empty!")
-		return nil
-	}
-
-	shader := sdl.CreateGPUShader(g.r.gpu, {
-		code_size = len(code),
-		code = raw_data(code),
-		entrypoint = "main",
-		format = {.SPIRV},
-		stage = stage,
-	})
-
-	if shader == nil {
-		log.errorf("Failed to create GPU shader! %s", sdl.GetError())
-		return nil
-	}
-
-	return shader
-}
 
 @(export)
 game_init_window :: proc() {
@@ -120,18 +78,69 @@ game_init_window :: proc() {
 		.MOUSE_FOCUS,
 		.INPUT_FOCUS,
 	}
+	
 	g.r.window = sdl.CreateWindow("Odin SDL Hot Reload Template", 1280, 720, window_flags)
 	g.r.gpu = sdl.CreateGPUDevice({.SPIRV}, true, nil)
 
 	ok := sdl.ClaimWindowForGPUDevice(g.r.gpu, g.r.window); assert(ok)
 
-	vert_shd := load_shader(passthrough_vert, .VERTEX)
-	frag_shd := load_shader(fullbright_frag, .FRAGMENT)
+	vert_shd := load_shader(passthrough_vert, .VERTEX, 1)
+	frag_shd := load_shader(fullbright_frag, .FRAGMENT, 0)
+
+	vert_attr := []sdl.GPUVertexAttribute {
+		{
+			location = 0,
+			format = .FLOAT3,
+			offset = u32(offset_of(Vertex, loc)),
+		},
+		{
+			location = 1,
+			format = .FLOAT4,
+			offset = u32(offset_of(Vertex, color)),
+		},
+	}
+
+	g.r.tri_vertex_buffer = sdl.CreateGPUBuffer(g.r.gpu, {
+		usage = {.VERTEX},
+		size = tri_byte_size(),
+	})
+
+	transfer := sdl.CreateGPUTransferBuffer(g.r.gpu,{
+		usage = .UPLOAD,
+		size = tri_byte_size(),
+	})
+
+	transfer_mem := sdl.MapGPUTransferBuffer(g.r.gpu, transfer, false)
+	mem.copy(transfer_mem, raw_data(triangle_verts), int(tri_byte_size()))
+	sdl.UnmapGPUTransferBuffer(g.r.gpu, transfer)
+
+	copy_cmds := sdl.AcquireGPUCommandBuffer(g.r.gpu)
+	copy_pass := sdl.BeginGPUCopyPass(copy_cmds)
+
+	// upload vert data
+	sdl.UploadToGPUBuffer(copy_pass, {
+		transfer_buffer = transfer,
+	}, {
+		buffer = g.r.tri_vertex_buffer,
+		size = tri_byte_size(),
+	}, false)
+
+	sdl.EndGPUCopyPass(copy_pass)
+	ok = sdl.SubmitGPUCommandBuffer(copy_cmds); assert(ok)
 
 	g.r.pipeline = sdl.CreateGPUGraphicsPipeline(g.r.gpu, {
 		vertex_shader = vert_shd,
 		fragment_shader = frag_shd,
 		primitive_type = .TRIANGLELIST,
+		vertex_input_state = {
+			num_vertex_buffers = 1,
+			vertex_buffer_descriptions = &(sdl.GPUVertexBufferDescription{
+				slot = 0,
+				pitch = size_of(Vertex),
+			}),
+			num_vertex_attributes = u32(len(vert_attr)),
+			vertex_attributes = raw_data(vert_attr),
+		},
 		target_info = {
 			num_color_targets= 1,
 			color_target_descriptions= &(sdl.GPUColorTargetDescription {
@@ -157,7 +166,7 @@ game_camera :: proc() -> Camera {
 	return {
 		zoom = h/PIXEL_WINDOW_HEIGHT,
 		target = g.player_pos,
-		offset = { w/2, h/2 },
+		offset = { w/2, h/2, 0},
 	}
 }
 
@@ -168,61 +177,28 @@ ui_camera :: proc() -> Camera {
 }
 
 update :: proc() {
-	g.time.past_ns = g.time.now_ns
-	g.time.now_ns = sdl.GetTicksNS()
-	g.time.dt = f32(g.time.now_ns - g.time.past_ns) / f32(1_000_000_000)
-	
-	g.input.mouse_delta = {0, 0}
+	g.time.now_tick = sdl.GetTicks()
+	g.time.dt = f32(g.time.now_tick - g.time.past_tick) / 1000
+	g.time.past_tick = g.time.now_tick
 
-	ev: sdl.Event
-	for sdl.PollEvent(&ev) {
-		#partial switch ev.type {
-		case .KEY_DOWN:
-			g.input.keys_down[ev.key.scancode] = PressState {
-				pressed = true,
-				repeat = ev.key.repeat,
-			}
-		case .KEY_UP:
-			g.input.keys_down[ev.key.scancode] = PressState {
-				pressed = false,
-				repeat = false, 
-			}
-		case .MOUSE_MOTION:
-			g.input.mouse_delta = {f32(ev.motion.xrel), f32(ev.motion.yrel)}
-			g.input.mouse_loc = {f32(ev.motion.x), f32(ev.motion.y)}
-			fallthrough
-		case .MOUSE_BUTTON_UP:
-			fallthrough
-		case .MOUSE_BUTTON_DOWN:
-			for flag in sdl.MouseButtonFlag {
-				active_flags := sdl.GetMouseState(nil, nil)
-				g.input.mb_down[flag] = PressState {
-					pressed = flag in active_flags,
-					repeat = ev.button.down, // Mouse button down events are not repeated.
-				}
-			}
-		case .QUIT:
-			g.run = false 
-		}
-		log.debugf("Event: %s", ev.type)
-	}
+	cache_inputs()
 
-	input: V2f
+	input: V3f
 	if is_key_down(.W) {
-		input.y -= 1
+		input.y += 0.1
 	}
 	if is_key_down(.S) {
-		input.y += 1
+		input.y -= 0.1
 	}
 	if is_key_down(.A) {
-		input.x -= 1
+		input.x -= 0.1
 	}
 	if is_key_down(.D) {
-		input.x = 1
+		input.x += 0.1
 	}
 
 	input = linalg.normalize0(input)
-	g.player_pos += input * g.time.dt * 200
+	g.player_pos += input * g.time.dt * 10.0
 }
 
 draw :: proc() {
@@ -238,16 +214,29 @@ draw :: proc() {
 		log.errorf("Failed to acquire swapchain texture! %s", sdl.GetError())
 		return
 	}
+
+	window_dims: [2]i32
+	sdl.GetWindowSize(g.r.window, &window_dims[0], &window_dims[1])
+
+
+	proj_mat := linalg.matrix4_perspective_f32(math.to_radians_f32(70.0), f32(window_dims[0]) / f32(window_dims[1]), 0.001, 2000, false)
+	model_mat := linalg.matrix4_translate_f32({g.player_pos.x, g.player_pos.y, 5.0}) * linalg.matrix4_rotate_f32(g.player_rot.z, {0, 0, 1}) * linalg.matrix4_scale_f32({1,1,1})
+
+	ubo := UBO {
+		mvp = proj_mat * model_mat, // Combine projection and model matrices.
+	}
 	
 	color_target := sdl.GPUColorTargetInfo{
 		texture = swapchain_tex,
 		load_op = .CLEAR,
-		clear_color = { g.input.mb_down[.LEFT].pressed?.5:.3 , .6, .2, 1.0 },
+		clear_color = { .4, .4, .4, 1.0 },
 	}
 	pass := sdl.BeginGPURenderPass(cmds, &color_target, 1, nil)
 
 	sdl.BindGPUGraphicsPipeline(pass, g.r.pipeline)
+	sdl.BindGPUVertexBuffers(pass, 0, &(sdl.GPUBufferBinding{ buffer = g.r.tri_vertex_buffer, }), 1)
 
+	sdl.PushGPUVertexUniformData(cmds, 1, &ubo, size_of(ubo))
 	sdl.DrawGPUPrimitives(pass, 3, 1, 0, 0)
 
 	sdl.EndGPURenderPass(pass)
